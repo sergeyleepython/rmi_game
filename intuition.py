@@ -33,44 +33,40 @@ class User(object):
             self.set_current_global_state()
         elif local_state == IN_PROGRESS:
             print('started in progress')
-        current_global_state = self.global_state['current_global_state']
         active_user = self.global_state['active_user']
         print('username: {}'.format(self.username))
         print('Active user: {}'.format(active_user))
-        if current_global_state == WAITING_FOR_QUESTION:
+        if self.global_state['current_global_state'] == WAITING_FOR_QUESTION:
             print('Current state: {}'.format(WAITING_FOR_QUESTION))
             if active_user == self.username:
                 # ACTIVE: prompt user for question and answer (30 sec)
-                time_started = time.time()
-                question = False
-                while not (time.time() > time_started + self.timeout_for_question) and question == False:
-                    time.sleep(2)
+                question = None
+                correct_answer = None
+                while question is None or correct_answer is None:
+                    question = input("Please enter question: ")
                     self.global_state['current_global_state'] = WAITING_FOR_ANSWERS
-                    self.global_state['question'] = 'my question?'
-                    self.correct_answer = 42
-                    print('Asking question {}. Answer is {}'.format(self.global_state['question'],
-                                                                    self.correct_answer))
-                    self.question_asked_at = time.time()
-                    question = True
-                if question == False:
-                    print('Time is out for question.')
-                    self.global_state['active_user'] = self.define_next_active_user_by_order()
+                    self.global_state['question'] = question
+                    correct_answer = input("Please enter correct answer: ")
+                    try:
+                        self.correct_answer = int(correct_answer)
+                    except ValueError:
+                        correct_answer = None
+                print('Asking question {}. Answer is {}'.format(self.global_state['question'], self.correct_answer))
+                self.question_asked_at = time.time()
                 self.broadcast_state(self.global_state)
-        elif current_global_state == WAITING_FOR_ANSWERS:
+        elif self.global_state['current_global_state'] == WAITING_FOR_ANSWERS:
             print('Current state: {}'.format(WAITING_FOR_ANSWERS))
             if active_user != self.username:
                 # PASSIVE: send answer (3 sec)
                 time_started = time.time()
-                answer = False
-                while not (time.time() > time_started + self.timeout_for_answer) and answer == False:
-                    # prompt input
-                    time.sleep(1)
-                    print('Sending 42.')
-                    self.send_answer(42)
-                    answer = True
-                if answer == False:
-                    print('Time for answer is out. Sending None.')
-                    self.send_answer(None)
+                answer = None
+                while (self.global_state['current_global_state'] == WAITING_FOR_ANSWERS) or answer is None:
+                    answer = input("Please enter answer: ")
+                    try:
+                        answer = int(answer)
+                    except ValueError:
+                        answer = None
+                self.send_answer(answer)
         else:
             raise NotImplementedError
 
@@ -79,13 +75,13 @@ class User(object):
         with Pyro4.locateNS() as ns:
             for user, user_uri in ns.list(prefix="intuition.").items():
                 if user.split('.')[-1] != self.username:
-                    print(user)
+                    print('Extracted global state from: {}'.format(user))
                     # try:
-                    any_user_object = Pyro4.Proxy(user_uri)
-                    self.global_state = any_user_object.get_global_state()
-                    break
-                    # except CommunicationError:
-                    #     pass
+                    with Pyro4.Proxy(user_uri) as any_user_object:
+                        self.global_state = any_user_object.remote_global_state
+                        break
+                        # except CommunicationError:
+                        #     pass
 
     def set_users(self):
         """ Get list of users either from NS or from stored list """
@@ -115,9 +111,9 @@ class User(object):
         print(self.users_dict)
         active_user_uri = self.users_dict[active_username]
         print(active_user_uri)
-        active_user_object = Pyro4.Proxy(active_user_uri)
-        print("Active user: {}".format(active_user_object))
-        active_user_object.remote_receive_answer(self.username, answer)
+        with Pyro4.Proxy(active_user_uri) as active_user_object:
+            print("Active user: {}".format(active_user_object))
+            active_user_object.remote_receive_answer(self.username, answer)
 
     def define_next_active_user_by_order(self):
         """ ACTIVE: choose next after current"""
@@ -139,8 +135,8 @@ class User(object):
         print('Broadcasting {} for {}'.format(new_state, self.users_dict))
         for username, user_uri in self.users_dict.items():
             if username != self.username:
-                user_object = Pyro4.Proxy(user_uri)
-                user_object.remote_set_new_state(new_state)
+                with Pyro4.Proxy(user_uri) as user_object:
+                    user_object.remote_set_new_state(new_state)
 
     def remote_receive_answer(self, username, answer):
         """ ACTIVE: receive answers and calculate scores """
@@ -167,7 +163,8 @@ class User(object):
             self.scoreboard = []
 
     @Pyro4.expose
-    def get_global_state(self):
+    @property
+    def remote_global_state(self):
         return self.global_state
 
 
@@ -181,8 +178,8 @@ if __name__ == '__main__':
     print('Starting ...')
     user = User(args.username)
     user.start(local_state=STARTING)
-    with Pyro4.Daemon() as daemon:
-        user_uri = daemon.register(user)
+    with Pyro4.Daemon(host='10.240.19.119') as daemon:
+        user_uri = daemon.register(user, user+'_id')
         with Pyro4.locateNS() as ns:
             ns.register("intuition.{}".format(args.username), user_uri)
         print("Working ...")
