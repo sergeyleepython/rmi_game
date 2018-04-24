@@ -16,7 +16,9 @@ IN_PROGRESS = 'IN_PROGRESS'
 # transition options
 asking_question = 'asking_question'
 sending_results = 'sending_results'
-TRANSITIONS = {asking_question: 'Asking a new question.', sending_results: 'Sending round results.'}
+new_active_user = 'new_active_user'
+TRANSITIONS = {asking_question: 'Asking a new question.', sending_results: 'Sending round results.',
+               new_active_user: 'Elected new active user'}
 
 
 @Pyro4.expose
@@ -37,6 +39,7 @@ class User(object):
                     'round': 0,
                     'transition': None,
                     'users_dict': users_dict}
+    t = None
 
     def __init__(self, username):
         self._username = username
@@ -44,6 +47,9 @@ class User(object):
 
     def start(self, local_state=None):
         """ Main method """
+        if self.t is not None:
+            self.t.cancel()
+            self.t = None
         if local_state == STARTING:
             print('see STARTING')
             self._set_current_global_state()
@@ -107,6 +113,36 @@ class User(object):
                         self.answer = None
         else:
             raise NotImplementedError
+        self.t = threading.Timer(20.0, self.is_active_user_alive)
+        self.t.start()
+
+    def is_active_user_alive(self):
+        print('Waiting for the active user too long. Lets check if it is alive.')
+        users_dict = self.global_state['users_dict']
+        uri = users_dict[self.global_state['active_user']]
+        try:
+            with Pyro4.Proxy(uri) as user_object:
+                _ = user_object.username
+            print('Yes, {} is alive. Lets keep waiting.'.format(_))
+            self.t = threading.Timer(20.0, self.is_active_user_alive)
+            self.t.start()
+        except (CommunicationError):
+            print('Yes, it is down.')
+            print('Find new active user.')
+            new_active = self._define_next_active_user_by_order(freeze=True)
+            print('New active user is {}'.format(new_active))
+            if new_active == self._username:
+                print('It is me! Start broadcasting.')
+                self.global_state['active_user'] = self._username
+                self.global_state['current_global_state'] = WAITING_FOR_QUESTION
+                self.global_state['question'] = None
+                self.global_state['scoreboard'] = []
+                self.global_state['correct_answer'] = None
+                self.global_state['round'] += 1
+                self._broadcast_state(self.global_state, transition=new_active_user)
+                self.start(IN_PROGRESS)
+            else:
+                print('It is not me. Keep waiting.')
 
     def _read_answers(self):
         """ 
@@ -138,7 +174,7 @@ class User(object):
             with Pyro4.locateNS() as ns:
                 users_uri = [user_uri for username, user_uri in ns.list(prefix="intuition.").items() if
                              username != 'intuition.{}'.format(self._username)]
-                ns._pyroRelease()  # todo: does it work ????
+                ns._pyroRelease()
         except NamingError:
             print('Empty NS!!!!')
             users_uri = [user_uri for username, user_uri in self.users_dict if
@@ -177,8 +213,8 @@ class User(object):
         except KeyError:
             # NS is unavailable but we continue working with the current users
             pass
-        if not self.users_dict:
-            raise ValueError("No users found!")
+            # if not self.users_dict:
+            #     raise ValueError("No users found!")
 
     @Pyro4.oneway
     def set_answer(self, answer):
@@ -189,17 +225,22 @@ class User(object):
         """ PASSIVE: get answer """
         return self.answer
 
-    def _define_next_active_user_by_order(self):
-        """ ACTIVE: choose next after current"""
+    def _define_next_active_user_by_order(self, freeze=None):
+        """ ACTIVE: choose next after current. freeze - don't update users_dict from NS."""
         print('Start defining new active user ...')
-        self._set_users()
-        usernames_list = list(self.users_dict.keys())
+        if freeze is None:
+            self._set_users()
+        users_dict = self.global_state['users_dict']
+        usernames_list = list(users_dict.keys())
         usernames_list = sorted(usernames_list)
-        current_index = usernames_list.index(self.global_state['active_user'])
-        if (current_index + 1) == len(usernames_list):
-            next_username = usernames_list[0]
+        if self.global_state['active_user'] in usernames_list:
+            current_index = usernames_list.index(self.global_state['active_user'])
+            if (current_index + 1) == len(usernames_list):
+                next_username = usernames_list[0]
+            else:
+                next_username = usernames_list[current_index + 1]
         else:
-            next_username = usernames_list[current_index + 1]
+            next_username = usernames_list[0]
         return next_username
 
     def _broadcast_state(self, new_state, transition=None):
@@ -209,7 +250,10 @@ class User(object):
         users = self._get_other_users_proxies()
         print('Broadcasting {} for {}'.format(new_state, users))
         for user_object in users:
-            user_object.remote_set_new_state(new_state)
+            try:
+                user_object.remote_set_new_state(new_state)
+            except CommunicationError:
+                pass
 
     @Pyro4.oneway
     def remote_set_new_state(self, new_state):
@@ -227,6 +271,8 @@ class User(object):
             self.global_state['scoreboard'] = []
             print('Leaderboard: {}'.format(self.global_state['leaderboard']))
             self.global_state['leaderboard'] = defaultdict(int)
+        elif transition == new_active_user:
+            print('Round {}'.format(self.global_state['round']))
         else:
             raise NotImplementedError
         self.start(IN_PROGRESS)
