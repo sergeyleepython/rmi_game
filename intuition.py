@@ -1,3 +1,4 @@
+import threading
 from collections import defaultdict
 import time
 
@@ -21,7 +22,7 @@ class User(object):
     timeout_for_answer = 3
     timeout_waiting_answers = timeout_for_answer + 1
     global_state = {'active_user': username, 'current_global_state': WAITING_FOR_QUESTION,
-                    'question': 'What is going on?', 'leaderboard': defaultdict(int), 'scoreboard': [],
+                    'question': None, 'leaderboard': defaultdict(int), 'scoreboard': [],
                     'correct_answer': None, 'round': 0}
 
     def __init__(self, username):
@@ -31,6 +32,7 @@ class User(object):
     def start(self, local_state=None):
         """ Main method """
         if local_state == STARTING:
+            print('see STARTING')
             self._set_current_global_state()
         elif local_state == IN_PROGRESS:
             print('started in progress')
@@ -38,7 +40,7 @@ class User(object):
         print('username: {}'.format(self.username))
         print('Active user: {}'.format(active_user))
         if self.global_state['current_global_state'] == WAITING_FOR_QUESTION:
-            print('Current state: {}'.format(WAITING_FOR_QUESTION))
+            print('Global state: {}'.format(WAITING_FOR_QUESTION))
             if active_user == self.username:
                 # ACTIVE: ask question, wait and gather answers
                 self.global_state['round'] += 1
@@ -63,14 +65,15 @@ class User(object):
                 self._read_answers()
                 self._calculate_winner()
                 self.global_state['active_user'] = self._define_next_active_user_by_order()
+                self.global_state['question'] = None
                 self.global_state['current_global_state'] = WAITING_FOR_QUESTION
                 self._broadcast_state(self.global_state)
                 self.correct_answer = None
                 self.start(IN_PROGRESS)
             else:
-                print('Waiting for a question ...')
+                print('You are waiting for a question from another user. Just wait!')
         elif self.global_state['current_global_state'] == WAITING_FOR_ANSWERS:
-            print('Current state: {}'.format(WAITING_FOR_ANSWERS))
+            print('Global state: {}'.format(WAITING_FOR_ANSWERS))
             if active_user != self.username:
                 # PASSIVE: set answer
                 answer = None
@@ -82,10 +85,9 @@ class User(object):
                         print('Answer should be a number!')
                         self.answer = None
                 print('Thank you for your answer!')
-                if self.global_state['current_global_state'] == WAITING_FOR_QUESTION:
-                    print('But you did not get to answer. Time is up.')
-                # Wait until active user get all answers and change state
-                self.start(IN_PROGRESS)
+                # if self.global_state['current_global_state'] == WAITING_FOR_QUESTION:
+                #     print('But you did not get to answer. Time is up.')
+                # self.start(IN_PROGRESS)
         else:
             raise NotImplementedError
 
@@ -116,11 +118,12 @@ class User(object):
         """ Helper function. Returns all the user objects except the current one. """
 
         try:
-            ns = Pyro4.locateNS()
-            users_uri = [user_uri for username, user_uri in ns.list(prefix="intuition.").items() if
-                         username != 'intuition.{}'.format(self.username)]
-            # ns._pyroRelease()  # todo: does it work ????
+            with Pyro4.locateNS() as ns:
+                users_uri = [user_uri for username, user_uri in ns.list(prefix="intuition.").items() if
+                             username != 'intuition.{}'.format(self.username)]
+                # ns._pyroRelease()  # todo: does it work ????
         except NamingError:
+            print('Empty NS!!!!')
             users_uri = [user_uri for username, user_uri in self.users_dict if
                          username != 'intuition.{}'.format(self.username)]
         users_objects = []
@@ -129,33 +132,22 @@ class User(object):
                 with Pyro4.Proxy(uri) as user_object:
                     users_objects.append(user_object)
             except NamingError:
+                print(uri + ' is not found!')
                 pass
         return users_objects
 
-    def _get_other_users_uris(self):
-        """ Helper function. Returns all the user objects except the current one. """
-
-        try:
-            ns = Pyro4.locateNS()
-            users_uri = [user_uri for username, user_uri in ns.list(prefix="intuition.").items() if
-                         username != 'intuition.{}'.format(self.username)]
-            # ns._pyroRelease()  # todo: does it work ????
-        except NamingError:
-            users_uri = [user_uri for username, user_uri in self.users_dict if
-                         username != 'intuition.{}'.format(self.username)]
-        return users_uri
-
     def _set_current_global_state(self):
         """ Helper function. Get it from any user. If no users create state and become an active user. """
-        users_uris = self._get_other_users_uris()
-        if users_uris:
-            print('Try to set {} global setting.'.format(users_uris[0]))
-            try:
-                with Pyro4.Proxy(users_uris[0]) as user_proxy:
-                    self.global_state = user_proxy.remote_global_state()
-                    print('Set {} global setting.'.format(users_uris[0]))
-            except NamingError:
-                raise
+        proxies = self._get_other_users_proxies()
+        if proxies:
+            for proxy in proxies:
+                print('Try to set {} global setting.'.format(proxy))
+                try:
+                    self.global_state = proxy.remote_global_state()
+                    print('Set {} global setting.'.format(proxy))
+                    break
+                except (NamingError, CommunicationError):
+                    raise
 
     def _set_users(self):
         """ Set local users dict from NS or from stored list """
@@ -179,6 +171,7 @@ class User(object):
         if self.global_state['scoreboard']:
             print(self.global_state['scoreboard'])
             self.global_state['scoreboard'] = []
+        self.start(IN_PROGRESS)
 
     @Pyro4.oneway
     def set_answer(self, answer):
@@ -231,11 +224,11 @@ if __name__ == '__main__':
 
     print('Starting ...')
     user = User(args.username)
-
+    user_thread = threading.Thread(target=user.start, args=['STARTING'])
+    user_thread.start()
     with Pyro4.Daemon() as daemon:
         user_uri = daemon.register(user, args.username + '_id')
         print(user_uri)
         with Pyro4.locateNS() as ns:
             ns.register("intuition.{}".format(args.username), user_uri)
-            user.start(local_state=STARTING)
             daemon.requestLoop()
