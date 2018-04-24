@@ -14,19 +14,19 @@ IN_PROGRESS = 'IN_PROGRESS'
 
 @Pyro4.expose
 class User(object):
-    username = ''
+    _username = ''
     users_dict = {}
     scoreboard = []
     answer = None
     correct_answer = None
-    timeout_for_answer = 3
+    timeout_for_answer = 5
     timeout_waiting_answers = timeout_for_answer + 1
-    global_state = {'active_user': username, 'current_global_state': WAITING_FOR_QUESTION,
+    global_state = {'active_user': _username, 'current_global_state': WAITING_FOR_QUESTION,
                     'question': None, 'leaderboard': defaultdict(int), 'scoreboard': [],
                     'correct_answer': None, 'round': 0}
 
     def __init__(self, username):
-        self.username = username
+        self._username = username
         self.global_state['active_user'] = username
 
     def start(self, local_state=None):
@@ -37,11 +37,11 @@ class User(object):
         elif local_state == IN_PROGRESS:
             print('started in progress')
         active_user = self.global_state['active_user']
-        print('username: {}'.format(self.username))
+        print('username: {}'.format(self._username))
         print('Active user: {}'.format(active_user))
         if self.global_state['current_global_state'] == WAITING_FOR_QUESTION:
             print('Global state: {}'.format(WAITING_FOR_QUESTION))
-            if active_user == self.username:
+            if active_user == self._username:
                 # ACTIVE: ask question, wait and gather answers
                 self.global_state['round'] += 1
                 question = None
@@ -74,20 +74,22 @@ class User(object):
                 print('You are waiting for a question from another user. Just wait!')
         elif self.global_state['current_global_state'] == WAITING_FOR_ANSWERS:
             print('Global state: {}'.format(WAITING_FOR_ANSWERS))
-            if active_user != self.username:
+            if active_user != self._username:
                 # PASSIVE: set answer
                 answer = None
-                while (self.global_state['current_global_state'] == WAITING_FOR_ANSWERS) or self.answer is None:
+                while (self.global_state['current_global_state'] == WAITING_FOR_ANSWERS) or answer is None:
                     answer = input("Please enter answer ({} sec.): ".format(self.timeout_for_answer))
                     try:
                         self.answer = int(answer)
+                        print('Thank you for your answer!')
+                        break
                     except ValueError:
                         print('Answer should be a number!')
                         self.answer = None
-                print('Thank you for your answer!')
-                # if self.global_state['current_global_state'] == WAITING_FOR_QUESTION:
-                #     print('But you did not get to answer. Time is up.')
-                # self.start(IN_PROGRESS)
+
+                        # if self.global_state['current_global_state'] == WAITING_FOR_QUESTION:
+                        #     print('But you did not get to answer. Time is up.')
+                        # self.start(IN_PROGRESS)
         else:
             raise NotImplementedError
 
@@ -120,12 +122,12 @@ class User(object):
         try:
             with Pyro4.locateNS() as ns:
                 users_uri = [user_uri for username, user_uri in ns.list(prefix="intuition.").items() if
-                             username != 'intuition.{}'.format(self.username)]
+                             username != 'intuition.{}'.format(self._username)]
                 # ns._pyroRelease()  # todo: does it work ????
         except NamingError:
             print('Empty NS!!!!')
             users_uri = [user_uri for username, user_uri in self.users_dict if
-                         username != 'intuition.{}'.format(self.username)]
+                         username != 'intuition.{}'.format(self._username)]
         users_objects = []
         for uri in users_uri:
             try:
@@ -207,12 +209,17 @@ class User(object):
         """ ACTIVE: calculate winner and update leaderboard """
         if self.scoreboard:
             winner = sorted(self.scoreboard, key=lambda tup: tup[1])[0][0]
-            self.global_state['leaderboard'][winner] += 1
+            leaderboard = self.global_state['leaderboard']
+            leaderboard[winner] = leaderboard.get(winner, 0) + 1
             self.global_state['scoreboard'] = self.scoreboard
             self.scoreboard = []
 
     def remote_global_state(self):
         return self.global_state
+
+    @property
+    def username(self):
+        return self._username
 
 
 if __name__ == '__main__':
