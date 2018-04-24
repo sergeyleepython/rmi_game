@@ -233,7 +233,7 @@ if __name__ == '__main__':
     user = User(args.username)
     user_thread = threading.Thread(target=user.start, args=['STARTING'])
     user_thread.start()
-    with Pyro4.Daemon() as daemon:
+    with Pyro4.Daemon(host='0.0.0.0') as daemon:
         user_uri = daemon.register(user, args.username + '_id')
         print(user_uri)
         with Pyro4.locateNS() as ns:
