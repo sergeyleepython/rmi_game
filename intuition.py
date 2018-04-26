@@ -5,11 +5,11 @@ import time
 import Pyro4
 from Pyro4.errors import CommunicationError, NamingError, ConnectionClosedError
 
-# global states
+# global state names
 WAITING_FOR_QUESTION = 'WAITING_FOR_QUESTION'
 WAITING_FOR_ANSWERS = 'WAIT_FOR_ANSWERS'
 
-# start options
+# local states
 STARTING = 'STARTING'
 IN_PROGRESS = 'IN_PROGRESS'
 
@@ -31,7 +31,7 @@ class User(object):
     timeout_for_answer = 5
     timeout_waiting_answers = timeout_for_answer + 1
     global_state = {'active_user': _username,
-                    'current_global_state': WAITING_FOR_QUESTION,
+                    'global_state_name': WAITING_FOR_QUESTION,
                     'question': None,
                     'leaderboard': defaultdict(int),
                     'scoreboard': [],
@@ -52,7 +52,7 @@ class User(object):
             self.t = None
         if local_state == STARTING:
             print('see STARTING')
-            self._set_current_global_state()
+            self._set_new_global_state()
             self._set_users()
         elif local_state == IN_PROGRESS:
             print('started in progress')
@@ -61,7 +61,7 @@ class User(object):
         active_user = self.global_state['active_user']
         print('Username: {}'.format(self._username))
         print('Active user: {}'.format(active_user))
-        if self.global_state['current_global_state'] == WAITING_FOR_QUESTION:
+        if self.global_state['global_state_name'] == WAITING_FOR_QUESTION:
             print('Global state: {}'.format(WAITING_FOR_QUESTION))
             if active_user == self._username:
                 # ACTIVE: ask question, wait and gather answers
@@ -70,7 +70,7 @@ class User(object):
                 correct_answer = None
                 while question is None or correct_answer is None:
                     question = input("Please enter question: ")
-                    self.global_state['current_global_state'] = WAITING_FOR_ANSWERS
+                    self.global_state['global_state_name'] = WAITING_FOR_ANSWERS
                     self.global_state['question'] = question
                     if correct_answer is None:
                         correct_answer = input("Please enter correct answer: ")
@@ -90,19 +90,19 @@ class User(object):
                 self.global_state['active_user'] = self._define_next_active_user_by_order()
                 self.global_state['question'] = None
                 self.global_state['correct_answer'] = self.correct_answer
-                self.global_state['current_global_state'] = WAITING_FOR_QUESTION
+                self.global_state['global_state_name'] = WAITING_FOR_QUESTION
                 self._set_users()
                 self._broadcast_state(self.global_state, transition=sending_results)
                 self.correct_answer = None
                 self.start(IN_PROGRESS)
             else:
                 print('You are waiting for a question from another user. Just wait!')
-        elif self.global_state['current_global_state'] == WAITING_FOR_ANSWERS:
+        elif self.global_state['global_state_name'] == WAITING_FOR_ANSWERS:
             print('Global state: {}'.format(WAITING_FOR_ANSWERS))
             if active_user != self._username:
                 # PASSIVE: set answer
                 answer = None
-                while (self.global_state['current_global_state'] == WAITING_FOR_ANSWERS) or answer is None:
+                while (self.global_state['global_state_name'] == WAITING_FOR_ANSWERS) or answer is None:
                     answer = input("Please enter answer ({} sec.): ".format(self.timeout_for_answer))
                     try:
                         self.answer = int(answer)
@@ -134,7 +134,7 @@ class User(object):
             if new_active == self._username:
                 print('It is me! Start broadcasting.')
                 self.global_state['active_user'] = self._username
-                self.global_state['current_global_state'] = WAITING_FOR_QUESTION
+                self.global_state['global_state_name'] = WAITING_FOR_QUESTION
                 self.global_state['question'] = None
                 self.global_state['scoreboard'] = []
                 self.global_state['correct_answer'] = None
@@ -189,7 +189,7 @@ class User(object):
                 pass
         return users_objects
 
-    def _set_current_global_state(self):
+    def _set_new_global_state(self):
         """ Helper function. Get it from any user. If no users create state and become an active user. """
         proxies = self._get_other_users_proxies()
         if proxies:
@@ -312,7 +312,7 @@ if __name__ == '__main__':
     user = User(username)
     user_thread = threading.Thread(target=user.start, args=['STARTING'])
     user_thread.start()
-    with Pyro4.Daemon(host='0.0.0.0') as daemon:
+    with Pyro4.Daemon(host=Pyro4.socketutil.getIpAddress("")) as daemon:
         user_uri = daemon.register(user, username + '_id')
         # print(user_uri)
         with Pyro4.locateNS() as ns:
