@@ -18,7 +18,7 @@ asking_question = 'asking_question'
 sending_results = 'sending_results'
 new_active_user = 'new_active_user'
 TRANSITIONS = {asking_question: 'Asking a new question.', sending_results: 'Sending round results.',
-               new_active_user: 'Elected new active user'}
+               new_active_user: 'Recovering from active user crash.'}
 
 
 @Pyro4.expose
@@ -70,6 +70,8 @@ class User(object):
                 correct_answer = None
                 while question is None or correct_answer is None:
                     question = input("Please enter question: ")
+                    unit = input("Please enter unit of measurment: ")
+                    question = '{} ({})'.format(question, unit)
                     self.global_state['global_state_name'] = WAITING_FOR_ANSWERS
                     self.global_state['question'] = question
                     if correct_answer is None:
@@ -113,8 +115,9 @@ class User(object):
                         self.answer = None
         else:
             raise NotImplementedError
-        self.t = threading.Timer(20.0, self.is_active_user_alive)
-        self.t.start()
+        if active_user != self._username:
+            self.t = threading.Timer(20.0, self.is_active_user_alive)
+            self.t.start()
 
     def is_active_user_alive(self):
         print('Waiting for the active user too long. Lets check if it is alive.')
@@ -296,12 +299,14 @@ class User(object):
 
 if __name__ == '__main__':
     import argparse
+    import socket
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("username")
+    parser.add_argument("username", type=str)
     args = parser.parse_args()
     username = args.username
     pyroname = "intuition.{}".format(username)
+    # check if already registered in NS
     with Pyro4.locateNS() as ns:
         pyronames = list(ns.list(prefix="intuition.").keys())
         if pyroname in pyronames:
@@ -312,12 +317,28 @@ if __name__ == '__main__':
     user = User(username)
     user_thread = threading.Thread(target=user.start, args=['STARTING'])
     user_thread.start()
-    with Pyro4.Daemon(host='0.0.0.0') as daemon:
+
+    # get network ip
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.connect(("8.8.8.8", 80))
+        ext_ip = s.getsockname()[0]
+
+    # register in daemon
+    with Pyro4.Daemon(host=ext_ip) as daemon:
         user_uri = daemon.register(user, username + '_id')
-        # print(user_uri)
+        # register in Name Server
         with Pyro4.locateNS() as ns:
             ns.register(pyroname, user_uri)
             daemon.requestLoop()
 
 # 10.240.18.243 - innopolis
 # 10.91.34.160 - innopolisU
+
+
+# print([l for l in ([ip for ip in socket.gethostbyname_ex(socket.gethostname())[2] if not ip.startswith("127.")][:1], [
+#     [(s.connect(('8.8.8.8', 53)), s.getsockname()[0], s.close()) for s in
+#      [socket.socket(socket.AF_INET, socket.SOCK_DGRAM)]][0][1]]) if l][0][0])
+# or
+# with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+#     s.connect(("8.8.8.8", 80))
+#     print(s.getsockname()[0])
