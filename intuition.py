@@ -40,6 +40,7 @@ class User(object):
                     'transition': None,
                     'users_dict': users_dict}
     t = None
+    answer_timeout = False
 
     def __init__(self, username):
         self._username = username
@@ -51,37 +52,42 @@ class User(object):
             self.t.cancel()
             self.t = None
         if local_state == STARTING:
-            print('see STARTING')
+            # print('see STARTING')
             self._set_new_global_state()
             self._set_users()
         elif local_state == IN_PROGRESS:
-            print('started in progress')
+            pass
+            # print('started in progress')
         else:
             raise NotImplementedError
+        self.global_state['round'] += 1
+        print('ROUND ' + str(self.global_state['round']))
         active_user = self.global_state['active_user']
-        print('Username: {}'.format(self._username))
-        print('Active user: {}'.format(active_user))
+        # print('Username: {}'.format(self._username))
+        print('For this round active user is {}'.format(active_user))
         if self.global_state['global_state_name'] == WAITING_FOR_QUESTION:
-            print('Global state: {}'.format(WAITING_FOR_QUESTION))
+            # print('Global state: {}'.format(WAITING_FOR_QUESTION))
             if active_user == self._username:
                 # ACTIVE: ask question, wait and gather answers
-                self.global_state['round'] += 1
+                print('It is YOU!')
+                if self.answer_timeout == True:
+                    print('But first press ENTER.')
                 question = None
                 correct_answer = None
-                while question is None or correct_answer is None:
-                    question = input("Please enter question: ")
-                    unit = input("Please enter unit of measurment: ")
+                while question is None:
+                    question = input("Now, enter question: ")
+                    unit = input("Enter unit of measurment: ")
                     question = '{} ({})'.format(question, unit)
                     self.global_state['global_state_name'] = WAITING_FOR_ANSWERS
                     self.global_state['question'] = question
-                    if correct_answer is None:
-                        correct_answer = input("Please enter correct answer: ")
+                while correct_answer is None:
+                    correct_answer = input("Enter correct answer: ")
                     try:
                         self.correct_answer = int(correct_answer)
-                    except TypeError:
+                    except (TypeError, ValueError):
                         print('Answer is not a number. Try again.')
                         correct_answer = None
-                print('Asking question {}. Answer is {}'.format(self.global_state['question'], self.correct_answer))
+                # print('Asking question: {}. Answer is {}'.format(self.global_state['question'], self.correct_answer))
                 # broadcast state with new question
                 self._set_users()
                 self._broadcast_state(self.global_state, transition=asking_question)
@@ -100,24 +106,37 @@ class User(object):
             else:
                 print('You are waiting for a question from another user. Just wait!')
         elif self.global_state['global_state_name'] == WAITING_FOR_ANSWERS:
-            print('Global state: {}'.format(WAITING_FOR_ANSWERS))
+            # print('Global state: {}'.format(WAITING_FOR_ANSWERS))
             if active_user != self._username:
                 # PASSIVE: set answer
-                answer = None
-                while (self.global_state['global_state_name'] == WAITING_FOR_ANSWERS) or answer is None:
-                    answer = input("Please enter answer ({} sec.): ".format(self.timeout_for_answer))
-                    try:
-                        self.answer = int(answer)
-                        print('Thank you for your answer!')
-                        break
-                    except ValueError:
-                        print('Answer should be a number!')
-                        self.answer = None
+                self.answer_timeout = False
+                t = threading.Thread(target=self._input_answer)
+                # t.daemon = True
+                t.start()
+                t.join(self.timeout_for_answer)
+                self.answer_timeout = True
         else:
             raise NotImplementedError
         if active_user != self._username:
+            # print('Threads before:')
+            # print(threading.enumerate())
             self.t = threading.Timer(20.0, self.is_active_user_alive)
             self.t.start()
+            # print('Threads after:')
+            # print(threading.enumerate())
+
+    def _input_answer(self):
+        answer = input("Please enter answer ({} sec.): ".format(self.timeout_for_answer))
+        if self.answer_timeout == False:
+            try:
+                self.answer = int(answer)
+                print('Thank you for your answer!')
+            except (TypeError, ValueError):
+                print('Answer should be a number!')
+                self.answer = None
+        else:
+            self.answer = None
+        self.answer_timeout = False
 
     def is_active_user_alive(self):
         print('Waiting for the active user too long. Lets check if it is alive.')
@@ -141,7 +160,6 @@ class User(object):
                 self.global_state['question'] = None
                 self.global_state['scoreboard'] = []
                 self.global_state['correct_answer'] = None
-                self.global_state['round'] += 1
                 self._broadcast_state(self.global_state, transition=new_active_user)
                 self.start(IN_PROGRESS)
             else:
@@ -152,20 +170,23 @@ class User(object):
         Iterate over all users, except the current, and calculate the answers. 
         Edit local scoreboard and leaderboard.
         """
-        print('Start reading answers from remote objects ...')
+        # print('Start reading answers from remote objects ...')
         users_objects = self._get_other_users_proxies()
         for user_object in users_objects:
-            user_answer = user_object.get_answer()
-            if user_answer is not None:
-                answer_delta = abs(self.correct_answer - user_answer)
-                self.scoreboard.append((user_object.username, answer_delta))
-                print('Scoreboard: {}'.format(self.scoreboard))
-                user_object.set_message('The answer is received.')
-            else:
-                user_object.set_message('Sorry. Time is up! You answer will not be counted.')
-            # reset answer attr for all users
-            user_object.reset_answer()
-        print('Finished reading answers from remote objects ...')
+            try:
+                user_answer = user_object.get_answer()
+                if user_answer is not None:
+                    answer_delta = abs(self.correct_answer - user_answer)
+                    self.scoreboard.append((user_object.username, answer_delta))
+                    # print('Scoreboard: {}'.format(self.scoreboard))
+                    user_object.set_message('The answer is received.')
+                else:
+                    user_object.set_message('Sorry. Time is up! You answer will not be counted.')
+                # reset answer attr for all users
+                user_object.reset_answer()
+            except CommunicationError:
+                pass
+                # print('Finished reading answers from remote objects ...')
 
     @Pyro4.oneway
     def set_message(self, message):
@@ -197,10 +218,10 @@ class User(object):
         proxies = self._get_other_users_proxies()
         if proxies:
             for proxy in proxies:
-                print('Try to set {} global setting.'.format(proxy))
+                # print('Try to set {} global setting.'.format(proxy))
                 try:
                     self.global_state = proxy.remote_global_state()
-                    print('Set {} global setting.'.format(proxy))
+                    # print('Set {} global setting.'.format(proxy))
                     break
                 except (CommunicationError):
                     pass
@@ -230,7 +251,7 @@ class User(object):
 
     def _define_next_active_user_by_order(self, freeze=None):
         """ ACTIVE: choose next after current. freeze - don't update users_dict from NS."""
-        print('Start defining new active user ...')
+        # print('Start defining new active user ...')
         if freeze is None:
             self._set_users()
         users_dict = self.global_state['users_dict']
@@ -251,7 +272,7 @@ class User(object):
         self.global_state['transition'] = transition
         # set scoreboard
         users = self._get_other_users_proxies()
-        print('Broadcasting {} for {}'.format(new_state, users))
+        # print('Broadcasting {} for {}'.format(new_state, users))
         for user_object in users:
             try:
                 user_object.remote_set_new_state(new_state)
@@ -263,19 +284,22 @@ class User(object):
         """ PASSIVE: receive a new state from active user """
         transition = new_state['transition']
         new_state['transition'] = None
-        print('Transition: {}'.format(TRANSITIONS[transition]))
+        # print('Transition: {}'.format(TRANSITIONS[transition]))
         self.global_state = new_state
         if transition == asking_question:
-            print('Round {}'.format(self.global_state['round']))
             print('Question: {}'.format(self.global_state['question']))
         elif transition == sending_results:
             print('Correct Answer is {}'.format(self.global_state['correct_answer']))
-            print('Scoreboard: {}'.format(self.global_state['scoreboard']))
+            try:
+                winner = self.global_state['scoreboard'][0][0]
+                print('WINNER is {}!!!'.format(winner))
+            except IndexError:
+                pass
+            print('Scoreboard (min. error): {}'.format(self.global_state['scoreboard']))
             self.global_state['scoreboard'] = []
             print('Leaderboard: {}'.format(self.global_state['leaderboard']))
-            self.global_state['leaderboard'] = defaultdict(int)
         elif transition == new_active_user:
-            print('Round {}'.format(self.global_state['round']))
+            pass
         else:
             raise NotImplementedError
         self.start(IN_PROGRESS)
@@ -283,7 +307,8 @@ class User(object):
     def _calculate_winner(self):
         """ ACTIVE: calculate winner and update leaderboard """
         if self.scoreboard:
-            winner = sorted(self.scoreboard, key=lambda tup: tup[1])[0][0]
+            self.scoreboard = sorted(self.scoreboard, key=lambda tup: tup[1])
+            winner = self.scoreboard[0][0]
             leaderboard = self.global_state['leaderboard']
             leaderboard[winner] = leaderboard.get(winner, 0) + 1
             self.global_state['scoreboard'] = self.scoreboard
