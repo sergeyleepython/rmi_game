@@ -161,7 +161,7 @@ class User(object):
             else:
                 user_object.set_message('Sorry. Time is up! You answer will not be counted.')
             # reset answer attr for all users
-            user_object.set_answer(None)
+            user_object.reset_answer()
         print('Finished reading answers from remote objects ...')
 
     @Pyro4.oneway
@@ -217,9 +217,9 @@ class User(object):
             #     raise ValueError("No users found!")
 
     @Pyro4.oneway
-    def set_answer(self, answer):
+    def reset_answer(self):
         """ PASSIVE: set answer """
-        self.answer = answer
+        self.answer = None
 
     def get_answer(self):
         """ PASSIVE: get answer """
@@ -318,3 +318,6 @@ if __name__ == '__main__':
         with Pyro4.locateNS() as ns:
             ns.register(pyroname, user_uri)
             daemon.requestLoop()
+
+# 10.240.18.243 - innopolis
+# 10.91.34.160 - innopolisU
