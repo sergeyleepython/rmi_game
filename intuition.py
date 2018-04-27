@@ -70,8 +70,8 @@ class User(object):
             if active_user == self._username:
                 # ACTIVE: ask question, wait and gather answers
                 print('It is YOU!')
-                if self.answer_timeout == True:
-                    print('But first press ENTER.')
+                # if self.answer_timeout == True:
+                #     print('But first press ENTER.')
                 question = None
                 correct_answer = None
                 while question is None:
@@ -201,7 +201,7 @@ class User(object):
                 ns._pyroRelease()
         except NamingError:
             print('Empty NS!!!!')
-            users_uri = [user_uri for username, user_uri in self.users_dict if
+            users_uri = [user_uri for username, user_uri in self.users_dict.items() if
                          username != 'intuition.{}'.format(self._username)]
         users_objects = []
         for uri in users_uri:
@@ -234,7 +234,7 @@ class User(object):
                 for user, user_uri in ns.list(prefix="intuition.").items():
                     users_dict[user.split('.')[-1]] = user_uri
             self.users_dict = self.global_state['users_dict'] = users_dict
-        except KeyError:
+        except (KeyError, NamingError):
             # NS is unavailable but we continue working with the current users
             pass
             # if not self.users_dict:
@@ -309,10 +309,13 @@ class User(object):
         if self.scoreboard:
             self.scoreboard = sorted(self.scoreboard, key=lambda tup: tup[1])
             winner = self.scoreboard[0][0]
+            print('WINNER is {}!!!'.format(winner))
+            self.global_state['scoreboard'] = self.scoreboard
+            print('Scoreboard (min. error): {}'.format(self.global_state['scoreboard']))
+            self.scoreboard = []
             leaderboard = self.global_state['leaderboard']
             leaderboard[winner] = leaderboard.get(winner, 0) + 1
-            self.global_state['scoreboard'] = self.scoreboard
-            self.scoreboard = []
+            print('Leaderboard: {}'.format(self.global_state['leaderboard']))
 
     def remote_global_state(self):
         return self.global_state
