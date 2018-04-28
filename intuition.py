@@ -28,7 +28,7 @@ class User(object):
     scoreboard = []
     answer = None
     correct_answer = None
-    timeout_for_answer = 5
+    timeout_for_answer = 10
     timeout_waiting_answers = timeout_for_answer + 1
     global_state = {'active_user': _username,
                     'global_state_name': WAITING_FOR_QUESTION,
