@@ -201,7 +201,8 @@ class User(object):
                 ns._pyroRelease()
         except NamingError:
             print('Empty NS!!!!')
-            users_uri = [user_uri for username, user_uri in self.users_dict.items() if
+            users_dict = self.global_state['users_dict']
+            users_uri = [user_uri for username, user_uri in users_dict.items() if
                          username != 'intuition.{}'.format(self._username)]
         users_objects = []
         for uri in users_uri:
