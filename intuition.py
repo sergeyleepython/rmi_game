@@ -104,7 +104,7 @@ class User(object):
                 self.correct_answer = None
                 self.start(IN_PROGRESS)
             else:
-                print('You are waiting for a question from another user. Just wait!')
+                print('You are waiting for a question from {}. Just wait!'.format(active_user))
         elif self.global_state['global_state_name'] == WAITING_FOR_ANSWERS:
             # print('Global state: {}'.format(WAITING_FOR_ANSWERS))
             if active_user != self._username:
